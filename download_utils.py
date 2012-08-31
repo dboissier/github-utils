@@ -5,34 +5,29 @@ import getpass
 import pprint
 import sys, os
 
-def list(username, repo):
-    response = requests.get("https://api.github.com/repos/%s/%s/downloads" % (username, repo))
-    return response.json
+def list_downloads(username, repo):
+    return requests.get("https://api.github.com/repos/%s/%s/downloads" % (username, repo)).json
 
 
 def find_download(downloads, filename):
-    for download in downloads:
-        if download['name'] == filename:
-            return download
-    return None
+    return next((download for download in downloads if download['name'] == filename), None)
 
 
 def upload(username, repo, filepath):
     password = getpass.getpass("Enter host password for user '%s':" % username)
 
-    downloads = list(username, repo)
+    downloads = list_downloads(username, repo)
 
-    if not os.path.isfile(filepath):
+    if not os.path.exists(filepath):
         print "ERROR: file '%s' does not exist" % filepath
         return
 
     filename = os.path.basename(filepath)
     file_size = os.path.getsize(filename)
 
-    existing_download = find_download(downloads, filename)
-    if existing_download is not None:
-        requests.delete(existing_download['url'], auth=(username, password))
-
+    download = find_download(downloads, filename)
+    if download:
+        requests.delete(download['url'], auth=(username, password))
 
     path = "https://api.github.com/repos/%s/%s/downloads" % (username, repo)
     print "Step 1/2: Creating metadata for '%s' on the '%s'" % (filename, path)
@@ -52,46 +47,40 @@ def upload(username, repo, filepath):
                  'Content-Type': response['content_type']
     }
 
+    with open(filepath, 'rb') as f:
+        upload_response = requests.post(response['s3_url'], data=form_data, files={'file': f})
 
-    file_to_upload_data = {'file': open(filepath, 'rb')}
-
-    response = requests.post(response['s3_url'], data=form_data, files=file_to_upload_data)
-
-    if 201 == response.status_code:
-        print "Done"
+        if 201 == upload_response.status_code:
+            print "Done"
 
 
 def delete(username, repo, filename):
     password = getpass.getpass("Enter host password for user '%s':" % username)
 
-    downloads = list(username, repo)
-
-    file_to_delete_metadata = None
-    for download in downloads:
-        if download['name'] == filename:
-            file_to_delete_metadata = download
-
-    if file_to_delete_metadata is None:
+    download = find_download(list_downloads(username, repo), filename)
+    if download:
+        response = requests.delete(download['url'], auth=(username, password))
+        if 204 == response.status_code:
+            print "File deleted"
+    else:
         print "'%s' not found on the repository" % filename
-        return
 
-    response = requests.delete(file_to_delete_metadata['url'], auth=(username, password))
-    if 204 == response.status_code:
-        print "File deleted"
 
-def runListCommand():
+def run_list_command():
     if len(sys.argv) == 4:
-        pprint.pprint(list(sys.argv[2], sys.argv[3]), indent=2)
+        pprint.pprint(list_downloads(sys.argv[2], sys.argv[3]), indent=2)
     else:
         print "Usage: python download_utils.py list <username> <repo>"
 
-def runUploadCommand():
+
+def run_upload_command():
     if len(sys.argv) == 5:
         upload(sys.argv[2], sys.argv[3], sys.argv[4])
     else:
         print "Usage: python download_utils.py upload <username> <repo> <filepath>"
 
-def runDeleteCommand():
+
+def run_delete_command():
     if len(sys.argv) == 5:
         delete(sys.argv[2], sys.argv[3], sys.argv[4])
     else:
@@ -103,8 +92,8 @@ if __name__ == '__main__':
     else:
         command = sys.argv[1]
         if "list" == command:
-            runListCommand()
+            run_list_command()
         elif "upload" == command:
-            runUploadCommand()
+            run_upload_command()
         elif "delete" == command:
-            runDeleteCommand()
+            run_delete_command()
